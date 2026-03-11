@@ -1,4 +1,6 @@
 niscope>=1.4.0
+hightime>=0.2.0
+nitclk>=1.4.0
 PyQt5>=5.15.0
 pyqtgraph>=0.13.0
 numpy>=1.24.0
