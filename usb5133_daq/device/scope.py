@@ -92,7 +92,7 @@ class MockScope(_ScopeBase):
 class NI5133(_ScopeBase):
     """NI USB-5133 디지타이저 래퍼. niscope 드라이버 필요."""
 
-    def __init__(self, resource_name: str = "USB0::0x3923::0x7527::0::RAW"):
+    def __init__(self, resource_name: str = "Dev1"):
         self._resource_name = resource_name
         self._session = None
         self.sample_rate = 0.0
@@ -102,6 +102,7 @@ class NI5133(_ScopeBase):
 
     def connect(self):
         import niscope  # noqa: PLC0415
+
         self._session = niscope.Session(self._resource_name)
 
     def disconnect(self):
@@ -128,10 +129,9 @@ class NI5133(_ScopeBase):
 
         import niscope  # noqa: PLC0415
         ch_str = ",".join(str(c) for c in channels)
-        self._session.configure_vertical(
+        self._session.channels[ch_str].configure_vertical(
             range=voltage_range,
-            coupling=niscope.VerticalCoupling.dc,
-            channel_name=ch_str,
+            coupling=niscope.VerticalCoupling.DC,
         )
         self._session.configure_horizontal_timing(
             min_sample_rate=sample_rate,
@@ -154,8 +154,7 @@ class NI5133(_ScopeBase):
         start_acquisition() 이후 반복 호출 가능.
         """
         ch_str = ",".join(str(c) for c in self.channels)
-        waveforms = self._session.fetch(
-            channel_name=ch_str,
+        waveforms = self._session.channels[ch_str].fetch(
             num_samples=self.record_length,
         )
         return np.stack([np.array(w.samples) for w in waveforms])
