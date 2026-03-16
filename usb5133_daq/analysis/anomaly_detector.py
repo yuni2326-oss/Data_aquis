@@ -5,7 +5,7 @@ import math
 from dataclasses import dataclass
 
 import numpy as np
-from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot
 from sklearn.ensemble import IsolationForest
 
 _CONTAMINATION = 0.05
@@ -40,8 +40,9 @@ class AnomalyDetector(QObject):
         self._score_mean: float = 0.0
         self._score_std: float = 1.0
 
+    @pyqtSlot(object)
     def on_features(self, vec: np.ndarray) -> None:
-        """FeatureCollector.features_ready 슬롯."""
+        """FeatureCollector.features_ready slot."""
         if len(self._baseline) < self._baseline_count:
             self._baseline.append(vec)
             if len(self._baseline) == self._baseline_count:
@@ -49,10 +50,8 @@ class AnomalyDetector(QObject):
                 self._if_model = IsolationForest(contamination=_CONTAMINATION).fit(X)
                 self._mean = X.mean(axis=0)
                 self._std = X.std(axis=0) + 1e-9  # prevent divide-by-zero
-                # Compute normalised score statistics from baseline
-                baseline_scores = np.array(
-                    [float(self._if_model.score_samples([v])[0]) for v in self._baseline]
-                )
+                # Compute normalised score statistics from baseline (batch call)
+                baseline_scores = self._if_model.score_samples(X)
                 self._score_mean = float(baseline_scores.mean())
                 self._score_std = float(baseline_scores.std()) + 1e-9
             self.result_ready.emit(

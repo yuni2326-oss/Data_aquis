@@ -1,7 +1,6 @@
 # tests/test_anomaly_detector.py
 import math
 import numpy as np
-import pytest
 import sys
 from PyQt5.QtCore import QCoreApplication
 
