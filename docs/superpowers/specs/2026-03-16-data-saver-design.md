@@ -30,7 +30,7 @@ FeatureCollector._on_timer()
                                                     results/YYYY-MM-DD HH-MM-SS_result.csv
 ```
 
-`raw_ready` and `result_ready` fire within the same Qt event loop iteration (both originate from `_on_timer`), so `DataSaver` can safely use a simple "hold the last raw" pattern without risking mismatched timestamps.
+Both signals fire synchronously within the same `_on_timer` call stack because all objects (`FeatureCollector`, `AnomalyDetector`, `DataSaver`) live on the main thread with direct Qt connections. This guarantees `raw_ready` always arrives before `result_ready` within each cycle, making a simple "hold the last raw" pattern safe. **Constraint:** All three objects must remain on the same thread; moving any of them to a worker thread would require revisiting this design.
 
 ---
 
@@ -39,6 +39,8 @@ FeatureCollector._on_timer()
 ### 1. `FeatureCollector` (modified)
 
 **File:** `usb5133_daq/analysis/feature_collector.py`
+
+Add `from __future__ import annotations` (consistent with codebase) and `from datetime import datetime`.
 
 Add one new signal:
 
@@ -59,13 +61,13 @@ def _on_timer(self) -> None:
     self.features_ready.emit(vec)
 ```
 
-Import addition: `from datetime import datetime`
-
 ---
 
 ### 2. `DataSaver` (new)
 
 **File:** `usb5133_daq/storage/data_saver.py`
+
+Include `from __future__ import annotations` at the top (required for `str | Path` union type on Python < 3.10).
 
 ```python
 class DataSaver(QObject):
@@ -79,24 +81,39 @@ class DataSaver(QObject):
 ```
 
 **Internal state:**
-- `_save_dir: Path` — ensured to exist at construction time
+- `_save_dir: Path` — ensured to exist at construction time via `Path.mkdir(parents=True, exist_ok=True)`
 - `_pending_raw: tuple[datetime, np.ndarray] | None` — holds the most recent raw data until `on_result` arrives
 
+**`__init__` attributes (initialised before signal connections):**
+```python
+self._save_dir = Path(save_dir)
+self._save_dir.mkdir(parents=True, exist_ok=True)  # OSError propagates to caller
+self._pending_raw: tuple[datetime, np.ndarray] | None = None
+```
+
 **`on_raw` behaviour:**
-1. Store `(timestamp, samples)` in `_pending_raw`, overwriting any previously unsaved entry (this should not happen in normal operation but is safe by design).
+1. Store `(timestamp, samples)` in `_pending_raw`. Under the thread constraint stated in the Architecture section, a pre-existing unsaved entry cannot exist here (it is architecturally impossible without a threading violation). The overwrite is retained solely as a defensive guard and is treated as dead code in normal operation.
 
 **`on_result` behaviour:**
 1. If `_pending_raw` is `None`, log a warning and return (result arrived before any raw data — should not happen in normal operation).
 2. Retrieve and clear `_pending_raw`.
 3. Derive the stem: `timestamp.strftime("%Y-%m-%d %H-%M-%S")`.
 4. Write `<stem>_raw.csv` and `<stem>_result.csv` to `_save_dir`.
-5. Any `OSError` during writing is caught and logged; it does not crash the application.
+5. If a file with the same stem already exists (e.g., rapid stop/restart within the same second), overwrite silently.
+6. Any `OSError` during writing is caught and logged via `logging.warning`; acquisition continues uninterrupted.
 
 **Raw CSV columns:** `sample_index,voltage`
-One row per sample (5 s × sample_rate rows).
+- `sample_index`: integer 0-based index
+- `voltage`: the floating-point value as produced by the acquisition layer (same unit as the `waveform` array in `AcquisitionWorker.data_ready` — volts for real hardware, arbitrary float for mock)
+- One row per sample (5 s × sample_rate rows)
 
 **Result CSV columns:** `timestamp,label,score,zscore_max,baseline_progress,baseline_total`
-One row (header + data row).
+- `timestamp`: the `datetime` value from `_pending_raw`, formatted as ISO 8601 `YYYY-MM-DD HH:MM:SS` (colons as time separator, compatible with `pandas.read_csv(parse_dates=["timestamp"])`). Note: the filename stem uses hyphens (`HH-MM-SS`) because colons are not valid in Windows filenames — these are two different format strings.
+- `label`, `score`, `zscore_max`, `baseline_progress`, `baseline_total`: taken directly from the `AnomalyResult` fields
+- During LEARNING phase, `score` and `zscore_max` are `math.nan`. These are written as the Python string `"nan"` by `csv.writer` — consumers must handle this (e.g., `pd.read_csv(..., na_values=["nan"])`).
+- One row (header + data row)
+
+**CSV writing library:** Use Python's standard library `csv.writer` for both files. Do not use `numpy.savetxt` (awkward with mixed types in result row) or `pandas` (unnecessary dependency).
 
 ---
 
@@ -104,19 +121,48 @@ One row (header + data row).
 
 **File:** `usb5133_daq/ui/main_window.py`
 
-In `_on_start()`:
+Add to `__init__`:
 ```python
-self._saver = DataSaver(save_dir="results")
+self._saver: DataSaver | None = None
+```
+
+In `_on_start()`, insert the saver block **after** the existing line `self._detector.result_ready.connect(self._on_anomaly_result)` (which is the last line of the existing wiring block), so that `self._collector` and `self._detector` are guaranteed to exist:
+```python
+# existing line (already present):
+self._detector.result_ready.connect(self._on_anomaly_result)
+
+# new lines — insert immediately after:
+try:
+    self._saver = DataSaver(save_dir="results")
+except OSError as exc:
+    QMessageBox.critical(self, "저장 오류", f"results/ 폴더를 생성할 수 없습니다:\n{exc}")
+    self._on_stop()
+    return
 self._collector.raw_ready.connect(self._saver.on_raw)
 self._detector.result_ready.connect(self._saver.on_result)
 ```
 
-In `_on_stop()`:
-```python
-self._saver = None  # DataSaver has no timer to stop
-```
+In `_on_stop()`, insert the saver block **before** the existing `self._collector = None` line (so that `_collector` and `_detector` are still valid when disconnecting). The complete updated `_on_stop` body:
 
-Add `_saver: DataSaver | None = None` to `__init__`.
+```python
+def _on_stop(self):
+    if self._worker and self._worker.isRunning():
+        self._worker.stop()
+        self._worker.wait(3000)
+    self._worker = None
+    # Disconnect and clear DataSaver before nulling _collector / _detector
+    if self._saver is not None and self._collector is not None and self._detector is not None:
+        self._collector.raw_ready.disconnect(self._saver.on_raw)
+        self._detector.result_ready.disconnect(self._saver.on_result)
+    self._saver = None
+    if self._collector is not None:
+        self._collector.stop()
+    self._collector = None
+    self._detector = None
+    self._btn_start.setEnabled(True)
+    self._btn_stop.setEnabled(False)
+    self._status_bar.showMessage("수집 정지")
+```
 
 ---
 
@@ -157,7 +203,9 @@ Test cases (no Qt event loop required — call slots directly):
 | `test_result_csv_written` | After `on_raw` + `on_result`, `_result.csv` exists with correct columns and one data row |
 | `test_filename_format` | Filenames match `YYYY-MM-DD HH-MM-SS_raw.csv` / `_result.csv` |
 | `test_result_without_raw` | `on_result` called before `on_raw` — no crash, no files written |
-| `test_multiple_cycles` | Two sequential `on_raw` + `on_result` pairs produce two file pairs with distinct timestamps |
+| `test_multiple_cycles` | Two sequential `on_raw` + `on_result` pairs with injected distinct `datetime` values produce two file pairs with distinct filenames |
+| `test_oserror_on_write` | Simulate write failure (patch `open` to raise `OSError`) — no crash, warning logged |
+| `test_result_csv_nan_values` | LEARNING-phase result (`score=nan`, `zscore_max=nan`) is written as string `"nan"` in the CSV |
 
 Tests use `tmp_path` (pytest fixture) for isolated temp directories.
 
@@ -165,9 +213,9 @@ Tests use `tmp_path` (pytest fixture) for isolated temp directories.
 
 ## Error Handling
 
-- `OSError` on file write: caught, warning logged via Python `logging`, acquisition continues.
-- `on_result` before `on_raw`: warning logged, no file written, no crash.
-- `save_dir` creation failure (permissions): `OSError` propagated at `DataSaver.__init__` time — will surface during `_on_start()` and should be shown to the user in a future enhancement (out of scope here).
+- `OSError` on file write: caught, `logging.warning` emitted, acquisition continues.
+- `on_result` before `on_raw`: `logging.warning` emitted, no file written, no crash.
+- `save_dir` creation failure (permissions): `OSError` propagated from `DataSaver.__init__` to `MainWindow._on_start`, which catches it, shows `QMessageBox.critical`, and calls `_on_stop` to abort acquisition cleanly.
 
 ---
 
@@ -176,3 +224,4 @@ Tests use `tmp_path` (pytest fixture) for isolated temp directories.
 - UI controls for save directory selection
 - File compression or rotation
 - Replay/load of saved files
+- Filename collision disambiguation beyond silent overwrite (e.g., `_001` suffix)
