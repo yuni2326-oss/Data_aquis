@@ -14,6 +14,9 @@ from usb5133_daq.device.scope import NI5133, MockScope
 from usb5133_daq.storage.csv_writer import save_waveform
 from usb5133_daq.ui.fft_plot import FFTPlot
 from usb5133_daq.ui.waveform_plot import WaveformPlot
+from usb5133_daq.analysis.feature_collector import FeatureCollector
+from usb5133_daq.analysis.anomaly_detector import AnomalyDetector, AnomalyResult
+from usb5133_daq.ui.anomaly_plot import AnomalyPlot
 
 VOLTAGE_RANGES = [0.5, 1.0, 2.0, 5.0]
 MAX_SAMPLE_RATE = 100_000_000.0
@@ -30,6 +33,8 @@ class MainWindow(QMainWindow):
         self._last_waveform = None
         self._last_sample_rate = 1_000_000.0
         self._use_mock = use_mock
+        self._collector: FeatureCollector | None = None
+        self._detector: AnomalyDetector | None = None
 
         self._build_ui()
         self._connect_signals()
@@ -46,7 +51,9 @@ class MainWindow(QMainWindow):
         self._fft_plot = FFTPlot()
         splitter.addWidget(self._waveform_plot)
         splitter.addWidget(self._fft_plot)
-        splitter.setSizes([400, 250])
+        self._anomaly_plot = AnomalyPlot()
+        splitter.addWidget(self._anomaly_plot)
+        splitter.setSizes([400, 200, 150])  # three panels: waveform, FFT, anomaly
         root.addWidget(splitter)
 
         root.addWidget(self._build_action_bar())
@@ -92,6 +99,24 @@ class MainWindow(QMainWindow):
             self._combo_voltage.addItem(f"±{v} V", v)
         self._combo_voltage.setCurrentIndex(1)
         layout.addWidget(self._combo_voltage)
+
+        layout.addWidget(QLabel("|"))
+        layout.addWidget(QLabel("수집주기(초):"))
+        self._edit_cycle = QLineEdit("30")
+        self._edit_cycle.setFixedWidth(45)
+        layout.addWidget(self._edit_cycle)
+
+        layout.addWidget(QLabel("수집창(초):"))
+        self._edit_window = QLineEdit("5")
+        self._edit_window.setFixedWidth(40)
+        layout.addWidget(self._edit_window)
+
+        layout.addWidget(QLabel("기준선횟수:"))
+        self._edit_baseline = QLineEdit("10")
+        self._edit_baseline.setFixedWidth(45)
+        self._edit_baseline.setPlaceholderText("20 이상 권장")
+        layout.addWidget(self._edit_baseline)
+
         layout.addStretch()
         return group
 
@@ -186,6 +211,24 @@ class MainWindow(QMainWindow):
         self._worker.error_occurred.connect(self._on_error)
         self._worker.start()
 
+        try:
+            cycle_sec = float(self._edit_cycle.text())
+            window_sec = float(self._edit_window.text())
+            baseline_count = int(self._edit_baseline.text())
+        except ValueError:
+            cycle_sec, window_sec, baseline_count = 30.0, 5.0, 10
+
+        self._collector = FeatureCollector(
+            sample_rate=self._last_sample_rate,
+            cycle_sec=cycle_sec,
+            collect_window_sec=window_sec,
+            channel=0,
+        )
+        self._detector = AnomalyDetector(baseline_count=baseline_count)
+        self._worker.data_ready.connect(self._collector.on_data)
+        self._collector.features_ready.connect(self._detector.on_features)
+        self._detector.result_ready.connect(self._on_anomaly_result)
+
         self._btn_start.setEnabled(False)
         self._btn_stop.setEnabled(True)
         self._status_bar.showMessage("수집 중...")
@@ -195,6 +238,8 @@ class MainWindow(QMainWindow):
             self._worker.stop()
             self._worker.wait(3000)
         self._worker = None
+        self._collector = None
+        self._detector = None
         self._btn_start.setEnabled(True)
         self._btn_stop.setEnabled(False)
         self._status_bar.showMessage("수집 정지")
@@ -209,6 +254,18 @@ class MainWindow(QMainWindow):
         self._on_stop()
         self._status_bar.showMessage(f"오류: {message}")
         QMessageBox.critical(self, "수집 오류", message)
+
+    def _on_anomaly_result(self, result: AnomalyResult) -> None:
+        self._anomaly_plot.update_result(result)
+        if result.label == "LEARNING":
+            tag = f"[학습 중 {result.baseline_progress}/{result.baseline_total}]"
+        elif result.label == "NORMAL":
+            tag = "[정상]"
+        elif result.label == "WARNING":
+            tag = "[WARNING]"
+        else:
+            tag = "[ALARM]"
+        self._status_bar.showMessage(f"{tag} 수집 중...")
 
     def _on_save(self):
         if self._last_waveform is None:
