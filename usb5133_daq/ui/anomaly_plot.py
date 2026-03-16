@@ -50,7 +50,7 @@ class AnomalyPlot(QWidget):
         self._plot_widget.addItem(
             pg.InfiniteLine(pos=_THRESHOLD_WARNING, angle=0,
                             pen=pg.mkPen("r", width=1, style=Qt.DashLine),
-                            label="ALARM", labelOpts={"position": 0.05})
+                            label="WARNING", labelOpts={"position": 0.05})
         )
 
         self._curve = self._plot_widget.plot(
@@ -68,7 +68,7 @@ class AnomalyPlot(QWidget):
 
         Note: method is named update_result (not update) to avoid shadowing QWidget.update().
         """
-        score = result.score if not math.isnan(result.score) else float("nan")
+        score = result.score
         self._scores.append(score)
         self._labels.append(result.label)
 
