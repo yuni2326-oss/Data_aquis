@@ -1,7 +1,5 @@
 # tests/test_feature_collector.py
 import numpy as np
-import pytest
-from unittest.mock import MagicMock, patch
 from PyQt5.QtCore import QCoreApplication
 import sys
 
@@ -91,3 +89,4 @@ class TestFeatureCollector:
         interval_before = collector._timer.interval()
         collector.on_data(_make_waveform())
         assert collector._timer.interval() == interval_before
+        assert collector._timer.isActive()  # still active, not stopped and restarted

@@ -54,6 +54,6 @@ class FeatureCollector(QObject):
     def _on_timer(self) -> None:
         if len(self._buf) < self._n_needed:
             return
-        samples = np.array(list(self._buf))[-self._n_needed:]
+        samples = np.array(self._buf)[-self._n_needed:]
         vec = extract_features(samples, self._sample_rate)
         self.features_ready.emit(vec)
