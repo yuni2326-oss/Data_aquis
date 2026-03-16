@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (
 from usb5133_daq.acquisition.worker import AcquisitionWorker
 from usb5133_daq.device.scope import NI5133, MockScope
 from usb5133_daq.storage.csv_writer import save_waveform
+from usb5133_daq.storage.data_saver import DataSaver
 from usb5133_daq.ui.fft_plot import FFTPlot
 from usb5133_daq.ui.waveform_plot import WaveformPlot
 from usb5133_daq.analysis.feature_collector import FeatureCollector
@@ -35,6 +36,7 @@ class MainWindow(QMainWindow):
         self._use_mock = use_mock
         self._collector: FeatureCollector | None = None
         self._detector: AnomalyDetector | None = None
+        self._saver: DataSaver | None = None
 
         self._build_ui()
         self._connect_signals()
@@ -230,6 +232,15 @@ class MainWindow(QMainWindow):
         self._collector.features_ready.connect(self._detector.on_features)
         self._detector.result_ready.connect(self._on_anomaly_result)
 
+        try:
+            self._saver = DataSaver(save_dir="results")
+        except OSError as exc:
+            QMessageBox.critical(self, "저장 오류", f"results/ 폴더를 생성할 수 없습니다:\n{exc}")
+            self._on_stop()
+            return
+        self._collector.raw_ready.connect(self._saver.on_raw)
+        self._detector.result_ready.connect(self._saver.on_result)
+
         self._btn_start.setEnabled(False)
         self._btn_stop.setEnabled(True)
         self._status_bar.showMessage("수집 중...")
@@ -239,6 +250,11 @@ class MainWindow(QMainWindow):
             self._worker.stop()
             self._worker.wait(3000)
         self._worker = None
+        # Disconnect and clear DataSaver before nulling _collector / _detector
+        if self._saver is not None and self._collector is not None and self._detector is not None:
+            self._collector.raw_ready.disconnect(self._saver.on_raw)
+            self._detector.result_ready.disconnect(self._saver.on_result)
+        self._saver = None
         if self._collector is not None:
             self._collector.stop()  # 타이머 명시적 중지 (GC 타이밍 의존 방지)
         self._collector = None
