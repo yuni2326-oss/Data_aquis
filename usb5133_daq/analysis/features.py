@@ -38,7 +38,7 @@ def extract_features(waveform: np.ndarray, sample_rate: float) -> np.ndarray:
 
     # Harmonic magnitudes — find bin closest to 2x and 3x dominant_freq
     def _mag_at_freq(target_hz: float) -> float:
-        if target_hz <= 0 or target_hz >= freqs[-1]:
+        if target_hz <= 0 or target_hz > freqs[-1]:
             return 0.0
         idx = int(np.argmin(np.abs(freqs - target_hz)))
         return float(mags[idx])
