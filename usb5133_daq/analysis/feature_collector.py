@@ -40,6 +40,10 @@ class FeatureCollector(QObject):
         self._timer.setInterval(int(cycle_sec * 1000))
         self._timer.timeout.connect(self._on_timer)
 
+    def stop(self) -> None:
+        """타이머를 명시적으로 중지. _on_stop에서 None 할당 전에 호출."""
+        self._timer.stop()
+
     def on_data(self, waveform: np.ndarray) -> None:
         """AcquisitionWorker.data_ready 슬롯.
 

@@ -112,7 +112,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._edit_window)
 
         layout.addWidget(QLabel("기준선횟수:"))
-        self._edit_baseline = QLineEdit("10")
+        self._edit_baseline = QLineEdit("20")
         self._edit_baseline.setFixedWidth(45)
         self._edit_baseline.setPlaceholderText("20 이상 권장")
         layout.addWidget(self._edit_baseline)
@@ -222,9 +222,10 @@ class MainWindow(QMainWindow):
             sample_rate=self._last_sample_rate,
             cycle_sec=cycle_sec,
             collect_window_sec=window_sec,
-            channel=0,
+            channel=0,  # CH0 고정: 예지보전은 첫 번째 채널 기준으로 학습
         )
         self._detector = AnomalyDetector(baseline_count=baseline_count)
+        # data_ready는 _on_data_ready(UI 갱신)와 collector.on_data(예지보전) 두 슬롯에 연결
         self._worker.data_ready.connect(self._collector.on_data)
         self._collector.features_ready.connect(self._detector.on_features)
         self._detector.result_ready.connect(self._on_anomaly_result)
@@ -238,6 +239,8 @@ class MainWindow(QMainWindow):
             self._worker.stop()
             self._worker.wait(3000)
         self._worker = None
+        if self._collector is not None:
+            self._collector.stop()  # 타이머 명시적 중지 (GC 타이밍 의존 방지)
         self._collector = None
         self._detector = None
         self._btn_start.setEnabled(True)
