@@ -35,6 +35,8 @@ class DataSaver(QObject):
         Architecturally, a pre-existing entry cannot exist under the single-thread
         constraint. This overwrite is a defensive guard only.
         """
+        if self._pending_raw is not None:
+            _log.warning("DataSaver.on_raw: overwriting unsaved raw data (threading violation?)")
         self._pending_raw = (timestamp, samples)
 
     @pyqtSlot(object)
@@ -59,8 +61,7 @@ class DataSaver(QObject):
         with path.open("w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(["sample_index", "voltage"])
-            for i, v in enumerate(samples):
-                writer.writerow([i, v])
+            writer.writerows(enumerate(samples))
 
     def _write_result(self, stem: str, timestamp: datetime, result: AnomalyResult) -> None:
         path = self._save_dir / f"{stem}_result.csv"

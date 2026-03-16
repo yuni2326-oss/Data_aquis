@@ -72,6 +72,8 @@ class TestDataSaver:
             rows = list(csv.reader(f))
         assert rows[0] == ["sample_index", "voltage"]
         assert len(rows) == N_SAMPLES + 1  # header + data rows
+        assert float(rows[1][0]) == 0      # first sample_index
+        assert float(rows[1][1]) == pytest.approx(0.0)  # first voltage (linspace starts at 0)
 
     def test_result_csv_written(self, tmp_path):
         saver = DataSaver(save_dir=tmp_path)
@@ -90,6 +92,10 @@ class TestDataSaver:
                            "baseline_progress", "baseline_total"]
         assert len(rows) == 2  # header + 1 data row
         assert rows[1][1] == "NORMAL"
+        assert rows[1][0] == "2026-03-16 14:30:00"  # ISO 8601 timestamp with colons
+        assert float(rows[1][2]) == pytest.approx(-0.05)  # score
+        assert int(rows[1][4]) == 20  # baseline_progress
+        assert int(rows[1][5]) == 20  # baseline_total
 
     def test_filename_format(self, tmp_path):
         saver = DataSaver(save_dir=tmp_path)
