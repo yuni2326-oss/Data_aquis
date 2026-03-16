@@ -47,6 +47,8 @@ class DataSaver(QObject):
             return
 
         timestamp, samples = self._pending_raw
+        # Clear before writing so a failed write does not block the next cycle.
+        # Intentional trade-off: on OSError the cycle's data is dropped (warning logged).
         self._pending_raw = None
 
         stem = timestamp.strftime("%Y-%m-%d %H-%M-%S")
@@ -57,6 +59,7 @@ class DataSaver(QObject):
             _log.warning("DataSaver: failed to write CSV files: %s", exc)
 
     def _write_raw(self, stem: str, samples: np.ndarray) -> None:
+        """samples는 1-D array (FeatureCollector가 단일 채널 슬라이스 후 emit)."""
         path = self._save_dir / f"{stem}_raw.csv"
         with path.open("w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
