@@ -90,3 +90,31 @@ class TestFeatureCollector:
         collector.on_data(_make_waveform())
         assert collector._timer.interval() == interval_before
         assert collector._timer.isActive()  # still active, not stopped and restarted
+
+
+from datetime import datetime
+
+def test_raw_ready_emitted_with_timestamp_and_samples():
+    """raw_ready is emitted once per timer tick, before features_ready."""
+    collector = FeatureCollector(
+        sample_rate=SAMPLE_RATE,
+        cycle_sec=0.001,  # 1ms — fires almost immediately
+        collect_window_sec=WINDOW_SEC,
+        channel=0,
+    )
+    raw_events: list[tuple] = []
+    collector.raw_ready.connect(lambda ts, s: raw_events.append((ts, s)))
+
+    # Feed enough data to fill the buffer
+    n_needed = int(WINDOW_SEC * SAMPLE_RATE)
+    waveform = _make_waveform(record_len=n_needed)
+    collector.on_data(waveform)
+
+    # Fire the timer manually
+    collector._timer.timeout.emit()
+
+    assert len(raw_events) == 1
+    ts, samples = raw_events[0]
+    assert isinstance(ts, datetime)
+    assert isinstance(samples, np.ndarray)
+    assert len(samples) == n_needed

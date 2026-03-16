@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import collections
+from datetime import datetime
 
 import numpy as np
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
@@ -13,10 +14,12 @@ class FeatureCollector(QObject):
     """raw 파형 버퍼 축적 후 주기적으로 FFT 특징 벡터를 추출해 emit.
 
     Signals:
+        raw_ready: (datetime, np.ndarray) — 타임스탬프 + shape (n_needed,) 샘플
         features_ready: np.ndarray shape (7,)
     """
 
-    features_ready = pyqtSignal(object)  # np.ndarray shape (7,)
+    raw_ready = pyqtSignal(object, object)    # (datetime, np.ndarray shape (n_needed,))
+    features_ready = pyqtSignal(object)        # np.ndarray shape (7,)
 
     def __init__(
         self,
@@ -59,5 +62,7 @@ class FeatureCollector(QObject):
         if len(self._buf) < self._n_needed:
             return
         samples = np.array(self._buf)[-self._n_needed:]
+        ts = datetime.now()
+        self.raw_ready.emit(ts, samples)
         vec = extract_features(samples, self._sample_rate)
         self.features_ready.emit(vec)
