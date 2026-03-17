@@ -18,6 +18,7 @@ from usb5133_daq.ui.waveform_plot import WaveformPlot
 from usb5133_daq.analysis.feature_collector import FeatureCollector
 from usb5133_daq.analysis.anomaly_detector import AnomalyDetector, AnomalyResult
 from usb5133_daq.ui.anomaly_plot import AnomalyPlot
+from usb5133_daq.ui.status_light import StatusLight
 
 VOLTAGE_RANGES = [0.5, 1.0, 2.0, 5.0]
 MAX_SAMPLE_RATE = 100_000_000.0
@@ -132,9 +133,12 @@ class MainWindow(QMainWindow):
         self._btn_save = QPushButton("CSV 저장")
         self._btn_stop.setEnabled(False)
         self._btn_save.setEnabled(False)
+        self._status_light = StatusLight()
 
         layout.addWidget(self._btn_start)
         layout.addWidget(self._btn_stop)
+        layout.addSpacing(12)
+        layout.addWidget(self._status_light)
         layout.addStretch()
         layout.addWidget(self._btn_save)
         return widget
@@ -233,16 +237,16 @@ class MainWindow(QMainWindow):
         self._detector.result_ready.connect(self._on_anomaly_result)
 
         try:
-            self._saver = DataSaver(save_dir="results")
+            self._saver = DataSaver(sample_rate=self._last_sample_rate, save_dir="results")
         except OSError as exc:
             QMessageBox.critical(self, "저장 오류", f"results/ 폴더를 생성할 수 없습니다:\n{exc}")
             self._on_stop()
             return
         self._collector.raw_ready.connect(self._saver.on_raw)
-        self._detector.result_ready.connect(self._saver.on_result)
 
         self._btn_start.setEnabled(False)
         self._btn_stop.setEnabled(True)
+        self._status_light.set_state("LEARNING")
         self._status_bar.showMessage("수집 중...")
 
     def _on_stop(self):
@@ -250,10 +254,8 @@ class MainWindow(QMainWindow):
             self._worker.stop()
             self._worker.wait(3000)
         self._worker = None
-        # Disconnect and clear DataSaver before nulling _collector / _detector
-        if self._saver is not None and self._collector is not None and self._detector is not None:
+        if self._saver is not None and self._collector is not None:
             self._collector.raw_ready.disconnect(self._saver.on_raw)
-            self._detector.result_ready.disconnect(self._saver.on_result)
         self._saver = None
         if self._collector is not None:
             self._collector.stop()  # 타이머 명시적 중지 (GC 타이밍 의존 방지)
@@ -261,6 +263,7 @@ class MainWindow(QMainWindow):
         self._detector = None
         self._btn_start.setEnabled(True)
         self._btn_stop.setEnabled(False)
+        self._status_light.set_state(None)
         self._status_bar.showMessage("수집 정지")
 
     def _on_data_ready(self, waveform: np.ndarray):
@@ -277,13 +280,18 @@ class MainWindow(QMainWindow):
     def _on_anomaly_result(self, result: AnomalyResult) -> None:
         self._anomaly_plot.update_result(result)
         if result.label == "LEARNING":
-            tag = f"[학습 중 {result.baseline_progress}/{result.baseline_total}]"
+            extra = f"학습 중 {result.baseline_progress}/{result.baseline_total}"
+            tag = f"[{extra}]"
         elif result.label == "NORMAL":
+            extra = ""
             tag = "[정상]"
         elif result.label == "WARNING":
+            extra = ""
             tag = "[WARNING]"
         else:
+            extra = ""
             tag = "[ALARM]"
+        self._status_light.set_state(result.label, extra)
         self._status_bar.showMessage(f"{tag} 수집 중...")
 
     def _on_save(self):

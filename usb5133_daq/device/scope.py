@@ -142,17 +142,23 @@ class NI5133(_ScopeBase):
         )
 
     def start_acquisition(self) -> None:
-        """연속 수집 시작. AcquisitionWorker.run() 진입 시 1회 호출."""
-        self._session.initiate()
+        """연속 수집 준비. 실제 arm은 fetch() 내부에서 호출마다 수행."""
 
     def stop_acquisition(self) -> None:
         """연속 수집 중단. AcquisitionWorker.stop() 후 호출."""
-        self._session.abort()
+        try:
+            self._session.abort()
+        except Exception:
+            pass
 
     def fetch(self) -> np.ndarray:
         """shape (num_channels, record_length)의 파형 반환.
-        start_acquisition() 이후 반복 호출 가능.
+
+        num_records=1 제약으로 인해 매 호출마다 abort→initiate로 재-arm한다.
+        이 방식이 NI-SCOPE에서 단일 레코드 연속 수집의 표준 패턴이다.
         """
+        self._session.abort()    # 이전 상태 초기화 (미시작 시 no-op)
+        self._session.initiate()  # 새 레코드 arm
         ch_str = ",".join(str(c) for c in self.channels)
         waveforms = self._session.channels[ch_str].fetch(
             num_samples=self.record_length,
